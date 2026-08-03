@@ -1,3 +1,8 @@
+-- ========================================== --
+--  Script desenvolvido por: kauetheprotogen  --
+--  Créditos: kauetheprotogen - GitHub/Roblox --
+-- ========================================== --
+
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
  
@@ -9,34 +14,50 @@ local tails = {}
 local counter = 0
 local lastRootRotation = CFrame.new()
  
--- ### Configurações de "Elite" ###
+-- Configurações de Física Dinâmica
 local SETTINGS = {
-SWAY_SPEED = 4.5,           -- Velocidade do balanço ocioso
-SWAY_AMPLITUDE = 0.15,      -- Amplitude do balanço parado (suave)
-LERP_SPEED = 0.12,          -- Reação da "mola" (menor = mais pesado)
-DRAG_RESISTANCE = 0.05,     -- O quanto a cauda "fica para trás" ao correr
-CURVE_INERTIA = 1.5,        -- Força centrífuga em curvas
-MAX_TILT = 0.8,             -- Limite para não bugar a rotação
+LERP_SPEED = 0.1, -- Suavidade geral da mola (quanto menor, mais pesada e fluida)
+MAX_TILT = 0.6, -- Limite de inclinação para evitar deformações feias
  
--- [NOVIDADES ADICIONADAS]
-RUN_WAG_MULTIPLIER = 0.4,   -- O quanto o balanço acelera enquanto o player anda/corre
-SWIM_AMPLITUDE = 0.6        -- Movimento mais largo e sinuoso quando está nadando
+-- Balanço base (Parado)
+IDLE_SWAY_SPEED = 3.5,
+IDLE_SWAY_AMP = 0.1,
+ 
+-- Movimento no Chão (Andar / Correr)
+MOVE_SWAY_SPEED = 7.0,
+MOVE_SWAY_AMP = 0.22,
+DRAG_PITCH = 0.008, -- O quanto a cauda estica para trás ao correr
+ 
+-- Curvas / Rotação
+TURN_INERTIA = 1.8, -- Força centrífuga ao virar o personagem
+ 
+-- Física Vertical (Ajustada)
+JUMP_PITCH = 0.45, -- Pular: Cauda aponta para BAIXO (resistência)
+FALL_PITCH = -0.55, -- Cair: Vento empurra a cauda para CIMA
+CLIMB_SWAY_SPEED = 5.0,
+CLIMB_SWAY_AMP = 0.15,
+ 
+-- Natação
+SWIM_SWAY_SPEED = 5.5,
+SWIM_SWAY_AMP = 0.45,
 }
  
+-- Mapeia e reseta o peso das partes da cauda
 local function scanTails()
     tails = {}
+    if not character then return end
+    
     for _, item in ipairs(character:GetDescendants()) do
         if string.find(string.lower(item.Name), "tail") then
             local part = item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart")
             if part then
-                -- [CORREÇÃO DA ÁGUA]: Tirar a colisão e a massa da cauda impede que ela afunde o player
                 part.CanCollide = false
-                part.Massless = true 
-                part.CustomPhysicalProperties = PhysicalProperties.new(0,0,0,0,0)
+                part.Massless = true
+                part.CustomPhysicalProperties = PhysicalProperties.new(0, 0, 0, 0, 0)
                 
                 local weld = part:FindFirstChild("AccessoryWeld") or part:FindFirstChildWhichIsA("Weld")
                 if weld then
-                    table.insert(tails, {weld = weld, originalC1 = weld.C1})
+                    table.insert(tails, { weld = weld, originalC1 = weld.C1 })
                 end
             end
         end
@@ -45,54 +66,85 @@ end
  
 RunService.RenderStepped:Connect(function(dt)
     local root = character:FindFirstChild("HumanoidRootPart")
-    if #tails == 0 or not root or not humanoid then return end
+    if #tails == 0 or not root or not humanoid or humanoid.Health <= 0 then return end
     
-    -- 1. Captura de Dados de Movimento
+    -- 1. Captura de Dados Espaciais
     local velocity = root.AssemblyLinearVelocity
     local localVel = root.CFrame:VectorToObjectSpace(velocity)
-    local rootRotation = root.CFrame
+    local state = humanoid:GetState()
     
-    local rotationDiff = (rootRotation:VectorToObjectSpace(lastRootRotation.LookVector)).X
+    -- Detecção de rotação (Curvas)
+    local rootRotation = root.CFrame
+    local rotationDiff = rootRotation:VectorToObjectSpace(lastRootRotation.LookVector).X
     lastRootRotation = rootRotation
     
-    -- Detecta se o jogador está na água
-    local isSwimming = humanoid:GetState() == Enum.HumanoidStateType.Swimming
+    -- 2. Máquina de Estados (Determina a dinâmica por ação)
+    local targetPitch = 0 -- Reclinamento vertical (X)
+    local targetYaw = 0 -- Balanço lateral (Y)
+    local targetRoll = 0 -- Torção da curva (Z)
     
-    -- [NOVIDADE 1]: Velocidade dinâmica do balanço baseada na velocidade do movimento
-    local speedMagnitude = math.clamp(localVel.Magnitude, 0, 30)
-    local currentSwaySpeed = SETTINGS.SWAY_SPEED + (speedMagnitude * SETTINGS.RUN_WAG_MULTIPLIER)
+    local swaySpeed = SETTINGS.IDLE_SWAY_SPEED
+    local swayAmp = SETTINGS.IDLE_SWAY_AMP
     
-    -- Aumenta o contador com a nova velocidade dinâmica
-    counter = counter + (dt * currentSwaySpeed)
+    local horizontalSpeed = Vector3.new(localVel.X, 0, localVel.Z).Magnitude
     
-    -- [NOVIDADE 2]: Amplitude fluida para natação vs Ocioso
-    local currentAmplitude = isSwimming and SETTINGS.SWIM_AMPLITUDE or SETTINGS.SWAY_AMPLITUDE
-    local activeSway = math.sin(counter) * currentAmplitude
-    
-    -- 3. Efeito de Arrasto (Correr para frente faz a cauda subir/recuar)
-    local dragX = math.clamp(localVel.Z * SETTINGS.DRAG_RESISTANCE * 0.1, -SETTINGS.MAX_TILT, SETTINGS.MAX_TILT)
-    
-    -- 4. Força Centrífuga (Curvas)
-    local curveForce = math.clamp(rotationDiff * SETTINGS.CURVE_INERTIA, -SETTINGS.MAX_TILT, SETTINGS.MAX_TILT)
-    
-    -- 5. Influência de Salto/Queda/Mergulho
-    local fallInfluence = 0
-    if isSwimming then
-        -- Na água, o eixo Y do pulo afeta a cauda suavemente como um leme
-        fallInfluence = math.clamp(localVel.Y * 0.03, -0.4, 0.4)
+    -- ESTADO: Nadando
+    if state == Enum.HumanoidStateType.Swimming then
+        swaySpeed = SETTINGS.SWIM_SWAY_SPEED
+        swayAmp = SETTINGS.SWIM_SWAY_AMP
+        targetPitch = math.clamp(-localVel.Y * 0.02, -0.3, 0.3)
+        
+        -- ESTADO: Escalando
+    elseif state == Enum.HumanoidStateType.Climbing then
+        swaySpeed = SETTINGS.CLIMB_SWAY_SPEED
+        swayAmp = SETTINGS.CLIMB_SWAY_AMP
+        targetPitch = 0.25 -- Levemente para baixo contra a parede
+        
+        -- ESTADO: Ar (Pulo / Queda)
+    elseif state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Jumping then
+        swaySpeed = 2.0
+        swayAmp = 0.05 -- Pouco balanço no ar
+        
+        if velocity.Y > 1 then
+            -- PULAR: Cauda vai para BAIXO (X positivo no CFrame local da cauda)
+            targetPitch = SETTINGS.JUMP_PITCH
+        elseif velocity.Y < -1 then
+            -- CAIR: Cauda vai para CIMA devido ao vento (X negativo)
+            targetPitch = SETTINGS.FALL_PITCH
+        end
+        
+        -- ESTADO: Chão (Parado / Andar / Correr)
     else
-        -- No ar/chão
-        fallInfluence = math.clamp(-velocity.Y * 0.02, -0.5, 0.5)
+        if horizontalSpeed > 1 then
+            -- Transição suave de ritmo dependendo da velocidade (Andar vs Correr)
+            local speedRatio = math.clamp(horizontalSpeed / 16, 0, 1)
+            swaySpeed = math.clamp(SETTINGS.MOVE_SWAY_SPEED * speedRatio, SETTINGS.IDLE_SWAY_SPEED, 10)
+            swayAmp = math.clamp(SETTINGS.MOVE_SWAY_AMP * speedRatio, SETTINGS.IDLE_SWAY_AMP, 0.35)
+            
+            -- Arrasto ao correr (Cauda reclina suavemente para trás)
+            targetPitch = math.clamp(localVel.Z * SETTINGS.DRAG_PITCH, -SETTINGS.MAX_TILT, SETTINGS.MAX_TILT)
+        else
+            -- Parado (Idle)
+            swaySpeed = SETTINGS.IDLE_SWAY_SPEED
+            swayAmp = SETTINGS.IDLE_SWAY_AMP
+        end
     end
     
-    -- Mistura final de movimentos
-    local targetRotation = CFrame.Angles(
-    fallInfluence + dragX, 
-    activeSway + curveForce, 
-    curveForce * 0.5 
-    )
+    -- 3. Cálculo do Balanço e Força Centrífuga
+    counter = counter + (dt * swaySpeed)
+    local activeSway = math.sin(counter) * swayAmp
     
-    -- 6. Aplicação Suavizada com Lerp Dinâmico
+    -- Força ao girar o personagem em movimento
+    local curveForce = math.clamp(rotationDiff * SETTINGS.TURN_INERTIA, -SETTINGS.MAX_TILT, SETTINGS.MAX_TILT)
+    
+    -- Combinação final dos eixos
+    targetPitch = math.clamp(targetPitch, -SETTINGS.MAX_TILT, SETTINGS.MAX_TILT)
+    targetYaw = activeSway + curveForce
+    targetRoll = curveForce * 0.4
+    
+    local targetRotation = CFrame.Angles(targetPitch, targetYaw, targetRoll)
+    
+    -- 4. Interpolação (Lerp) Suave em todas as instâncias de cauda
     for _, data in ipairs(tails) do
         if data.weld and data.weld.Parent then
             data.weld.C1 = data.weld.C1:Lerp(data.originalC1 * targetRotation, SETTINGS.LERP_SPEED)
@@ -100,10 +152,11 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
  
+-- Recarrega o rastreamento ao renascer
 player.CharacterAdded:Connect(function(newChar)
     character = newChar
     humanoid = character:WaitForChild("Humanoid")
-    task.wait(1)
+    task.wait(0.5)
     scanTails()
 end)
  
