@@ -1,3 +1,8 @@
+-- ========================================== --
+--  Script desenvolvido por: kauetheprotogen  --
+--  Créditos: kauetheprotogen - GitHub/Roblox --
+-- ========================================== --
+
 -- Configurações de Reflexo
 local BODY_REFLECT = 0.3      -- Brilho do corpo do personagem
 local ACCESSORY_REFLECT = 0.6 -- Brilho levemente maior nos acessórios
